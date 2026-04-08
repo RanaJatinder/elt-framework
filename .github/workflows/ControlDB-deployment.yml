@@ -10,36 +10,77 @@ jobs:
         - name: Display checkout files and folders
           run: Get-ChildItem ${{github.workspace}} -Recurse
 
-        - name: Setup .NET
-          uses: actions/setup-dotnet@v3
-          with:
-            dotnet-version: '8.0.x'
+        - name: Setup MSBuild
+          uses: microsoft/setup-msbuild@v1.1
 
-        - name: Install Microsoft.Build.Sql SDK
+        - name: Setup NuGet
+          uses: NuGet/setup-nuget@v1
+
+        - name: Install SSDT Build Components
           run: |
-            dotnet tool install -g microsoft.sqlpackage
-            dotnet add ${{github.workspace}}\elt-framework\ControlDB\ControlDB.sqlproj package Microsoft.Build.Sql --version 0.1.19-preview
+            nuget install Microsoft.Data.Tools.Msbuild `
+              -Version 10.0.61804.210 `
+              -OutputDirectory "C:\SSDT"
+            
+            $targetsPath = Get-ChildItem "C:\SSDT" `
+              -Recurse `
+              -Filter "Microsoft.Data.Tools.Schema.SqlTasks.targets" `
+              | Select-Object -First 1 `
+              -ExpandProperty DirectoryName
+            
+            echo "Found targets at: $targetsPath"
+            echo "NETCoreTargetsPath=$targetsPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+            
+            $SqlTargetsPath = Get-ChildItem "C:\SSDT" `
+              -Recurse `
+              -Filter "Microsoft.Data.Tools.Schema.SqlTasks.targets" `
+              | Select-Object -First 1 `
+              -ExpandProperty DirectoryName
+            
+            echo "SSDTPath=$SqlTargetsPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          shell: pwsh
+
+        - name: Build SQL Project
+          run: |
+            msbuild ${{github.workspace}}\elt-framework\ControlDB\ControlDB.sqlproj `
+              /p:Configuration=Release `
+              /p:NETCoreTargetsPath="$env:NETCoreTargetsPath" `
+              /p:VisualStudioVersion=17.0 `
+              /p:SQLDBExtensionsRefPath="$env:SSDTPath" `
+              /p:SSDTPath="$env:SSDTPath"
+          shell: pwsh
+
+        - name: Install SqlPackage
+          run: dotnet tool install -g microsoft.sqlpackage
+          shell: pwsh
 
         - name: Azure Login
           uses: Azure/login@v1
           with:
             creds: '{"clientId":"${{ secrets.CLIENT_ID }}","clientSecret":"${{ secrets.CLIENT_SECRET }}","subscriptionId":"${{ secrets.SUBSCRIPTION_ID }}","tenantId":"${{ secrets.TENANT_ID }}"}'
 
-        - name: Build and Deploy SQL Database
-          uses: Azure/sql-action@v2
-          with:
-            connection-string: ${{secrets.CONTROLDB_CONNECTIONSTRING}}
-            path: ${{github.workspace}}\elt-framework\ControlDB\ControlDB.sqlproj
-            action: 'Publish'
-            arguments: >
-              /p:DropPermissionsNotInSource=false
-              /p:BlockOnPossibleDataLoss=false
-              /p:DropRoleMembersNotInSource=false
-              /p:DropObjectsNotInSource=false
-              /p:IgnoreColumnOrder=true
-              /p:IgnorePermissions=true
-              /p:AllowIncompatiblePlatform=true
-              /p:ExcludeObjectTypes=Logins;Users
+        - name: Deploy SQL Database
+          run: |
+            $dacpacPath = Get-ChildItem "${{github.workspace}}\elt-framework\ControlDB" `
+              -Recurse `
+              -Filter "*.dacpac" `
+              | Select-Object -First 1 `
+              -ExpandProperty FullName
+            
+            echo "Deploying dacpac: $dacpacPath"
+            
+            sqlpackage /Action:Publish `
+              /SourceFile:"$dacpacPath" `
+              /TargetConnectionString:"${{secrets.CONTROLDB_CONNECTIONSTRING}}" `
+              /p:DropPermissionsNotInSource=false `
+              /p:BlockOnPossibleDataLoss=false `
+              /p:DropRoleMembersNotInSource=false `
+              /p:DropObjectsNotInSource=false `
+              /p:IgnoreColumnOrder=true `
+              /p:IgnorePermissions=true `
+              /p:AllowIncompatiblePlatform=true `
+              /p:ExcludeObjectTypes=Logins`;Users
+          shell: pwsh
 
         - name: Azure Logout
           run: az logout
