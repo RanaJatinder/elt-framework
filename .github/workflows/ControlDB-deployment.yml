@@ -6,12 +6,25 @@ jobs:
       steps:
         - name: Checkout code 
           uses: actions/checkout@v3
+
         - name: Display checkout files and folders
           run: Get-ChildItem ${{github.workspace}} -Recurse
+
+        - name: Setup .NET
+          uses: actions/setup-dotnet@v3
+          with:
+            dotnet-version: '8.0.x'
+
+        - name: Install Microsoft.Build.Sql SDK
+          run: |
+            dotnet tool install -g microsoft.sqlpackage
+            dotnet add ${{github.workspace}}\elt-framework\ControlDB\ControlDB.sqlproj package Microsoft.Build.Sql --version 0.1.19-preview
+
         - name: Azure Login
           uses: Azure/login@v1
           with:
-           creds: '{"clientId":"${{ secrets.CLIENT_ID }}","clientSecret":"${{ secrets.CLIENT_SECRET }}","subscriptionId":"${{ secrets.SUBSCRIPTION_ID }}","tenantId":"${{ secrets.TENANT_ID }}"}'
+            creds: '{"clientId":"${{ secrets.CLIENT_ID }}","clientSecret":"${{ secrets.CLIENT_SECRET }}","subscriptionId":"${{ secrets.SUBSCRIPTION_ID }}","tenantId":"${{ secrets.TENANT_ID }}"}'
+
         - name: Build and Deploy SQL Database
           uses: Azure/sql-action@v2
           with:
@@ -27,6 +40,6 @@ jobs:
               /p:IgnorePermissions=true
               /p:AllowIncompatiblePlatform=true
               /p:ExcludeObjectTypes=Logins;Users
+
         - name: Azure Logout
-          run: |
-            az logout
+          run: az logout
